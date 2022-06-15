@@ -1,20 +1,24 @@
 #include <Wire.h>
 #include <Adafruit_INA219.h>
-#include <WiFiNINA.h>
 #include <ArduinoJson.h> 
 #include <ArduinoHttpClient.h>
 #include <RTCZero.h>
 
-#include "arduino_secrets.h"
+#include "configuration.h"
 
-#define TABLE_ID 1
-#define CREATE_URL "/tables/create/"
-#define SERVER_IP "192.168.208.192"
-#define SERVER_PORT 8000
+#ifdef IS_WIFI_BOARD
+  #include <WiFiNINA.h>
+  #include "arduino_secrets.h"
+
+  int wifi_status = WL_IDLE_STATUS;
+  WiFiClient wifi;
+  HttpClient http = HttpClient(wifi, SERVER_IP, SERVER_PORT);
+#else
+  #include <MKRGSM.h>
+#endif
 
 char ssid[] = SECRET_SSID;        // your network SSID (name)
 char pass[] = SECRET_PASS;    // your network password (use for WPA, or use as key for WEP)
-int status = WL_IDLE_STATUS;     // the Wifi radio's status
 
 Adafruit_INA219 ina219;
 
@@ -27,32 +31,28 @@ float current_mA = 0;
 float loadvoltage = 0;
 float energy = 0;
 
-const unsigned int interval = 5000;
-
-// Internet connection
-WiFiClient wifi;
-HttpClient http = HttpClient(wifi, SERVER_IP, SERVER_PORT);
-
 RTCZero rtc;
 
-void printWifiData() {
-  Serial.println("Board Information:");
+#ifdef IS_WIFI_BOARD
+  void printWifiData() {
+    Serial.println("Board Information:");
 
-  // print your board's IP address:
-  IPAddress ip = WiFi.localIP();
-  Serial.print("IP Address: ");
-  Serial.println(ip);
+    // print your board's IP address:
+    IPAddress ip = WiFi.localIP();
+    Serial.print("IP Address: ");
+    Serial.println(ip);
 
-  Serial.println();
-  Serial.println("Network Information:");
-  Serial.print("SSID: ");
-  Serial.println(WiFi.SSID());
+    Serial.println();
+    Serial.println("Network Information:");
+    Serial.print("SSID: ");
+    Serial.println(WiFi.SSID());
 
-  // print the received signal strength:
-  long rssi = WiFi.RSSI();
-  Serial.print("signal strength (RSSI):");
-  Serial.println(rssi);
-}
+    // print the received signal strength:
+    long rssi = WiFi.RSSI();
+    Serial.print("signal strength (RSSI):");
+    Serial.println(rssi);
+  }
+#endif
 
 void sendTableUpdate() {
   DynamicJsonDocument doc(1024);
@@ -88,43 +88,45 @@ void setup() {
   delay(1000);
   ina219.begin();
 
-  // attempt to connect to Wifi network:
-  while (status != WL_CONNECTED) {
-    Serial.print("Attempting to connect to network: ");
-    Serial.println(ssid);
+#ifdef IS_WIFI_BOARD
+    // attempt to connect to Wifi network:
+    while (wifi_status != WL_CONNECTED) {
+      Serial.print("Attempting to connect to network: ");
+      Serial.println(ssid);
 
-    // Connect to WPA/WPA2 network
-    status = WiFi.begin(ssid, pass);
+      // Connect to WPA/WPA2 network
+      wifi_status = WiFi.begin(ssid, pass);
 
-    // wait 10 seconds for connection
-    delay(10000);
-  }
+      // wait 10 seconds for connection
+      delay(10000);
+    }
 
-  printWifiData();
+    printWifiData();
 
-  // Set RTC clock by WiFi
-  rtc.begin();
-  unsigned long epoch = 0;
+    // Set RTC clock by WiFi
+    rtc.begin();
+    unsigned long epoch = 0;
 
-  while (epoch == 0) {
-    Serial.print("Attempting to get RTC epoch");
+    while (epoch == 0) {
+      Serial.print("Attempting to get RTC epoch");
 
-    epoch = WiFi.getTime();
+      epoch = WiFi.getTime();
 
-    // wait 10 seconds for connection
-    delay(10000);
-  }
+      // wait 10 seconds for connection
+      delay(10000);
+    }
 
-  Serial.print("Epoch received: ");
-  Serial.println(epoch);
-  rtc.setEpoch(epoch);
-  Serial.println();
+    Serial.print("Epoch received: ");
+    Serial.println(epoch);
+    rtc.setEpoch(epoch);
+    Serial.println();
+#endif
 }
 
 void loop() {
   unsigned long currentMillis = millis();
 
-  if (currentMillis - previousMillis >= interval) {
+  if (currentMillis - previousMillis >= SEND_INTERVAL_MS) {
     previousMillis = currentMillis;
     
     ina219values();
@@ -138,5 +140,5 @@ void ina219values() {
   busvoltage = ina219.getBusVoltage_V();
   current_mA = ina219.getCurrent_mA();
   loadvoltage = busvoltage + (shuntvoltage / 1000);
-  energy = energy + (loadvoltage * current_mA * interval) / 1000 / 3600;
+  energy = energy + (loadvoltage * current_mA * SEND_INTERVAL_MS) / 1000 / 3600;
 }

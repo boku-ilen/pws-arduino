@@ -6,19 +6,22 @@
 
 #include "configuration.h"
 
-#ifdef IS_WIFI_BOARD
+#ifdef IS_WIFI_BOARD // WiFi Setup
   #include <WiFiNINA.h>
   #include "arduino_secrets.h"
 
   int wifi_status = WL_IDLE_STATUS;
   WiFiClient wifi;
   HttpClient http = HttpClient(wifi, SERVER_IP, SERVER_PORT);
-#else
+#else // GSM Setup
   #include <MKRGSM.h>
-#endif
 
-char ssid[] = SECRET_SSID;        // your network SSID (name)
-char pass[] = SECRET_PASS;    // your network password (use for WPA, or use as key for WEP)
+  GSMClient client;
+  GPRS gprs;
+  GSM gsmAccess;
+
+  HttpClient http = HttpClient(client, SERVER_IP, SERVER_PORT);
+#endif
 
 Adafruit_INA219 ina219;
 
@@ -74,6 +77,9 @@ void sendTableUpdate() {
   String content_type = "application/x-www-form-urlencoded";
   serializeJson(doc, json);
 
+  // Reconnect if needed
+  connectToInternet();
+
   // Send request
   http.post(CREATE_URL, content_type, json);
 
@@ -82,45 +88,64 @@ void sendTableUpdate() {
   Serial.println(response);
 }
 
+void connectToInternet() {
+#ifdef IS_WIFI_BOARD
+  // attempt to connect to Wifi network:
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print("Attempting to connect to network: ");
+    Serial.println(SECRET_SSID);
+
+    // Connect to WPA/WPA2 network
+    wifi_status = WiFi.begin(SECRET_SSID, SECRET_PASS);
+
+    // wait 10 seconds for connection
+    delay(10000);
+  }
+#else
+  Serial.println("Starting GSM connection...");
+  boolean connected = gsmAccess.getStatus() == GSM_READY;
+
+  while (!connected) {
+    if ((gsmAccess.begin(PINNUMBER) == GSM_READY) &&
+        (gprs.attachGPRS(GPRS_APN, GPRS_LOGIN, GPRS_PASSWORD) == GPRS_READY)) {
+      connected = true;
+    } else {
+      Serial.println("Not connected, retrying...");
+      delay(10000);
+    }
+  }
+#endif
+}
+
 void setup() {
   Serial.begin(9600);
   //while(!Serial);
   delay(1000);
   ina219.begin();
 
+  connectToInternet();
+
+  // Set RTC clock over the internet
+  rtc.begin();
+  unsigned long epoch = 0;
+
+  while (epoch == 0) {
+    Serial.print("Attempting to get RTC epoch");
+
 #ifdef IS_WIFI_BOARD
-    // attempt to connect to Wifi network:
-    while (wifi_status != WL_CONNECTED) {
-      Serial.print("Attempting to connect to network: ");
-      Serial.println(ssid);
-
-      // Connect to WPA/WPA2 network
-      wifi_status = WiFi.begin(ssid, pass);
-
-      // wait 10 seconds for connection
-      delay(10000);
-    }
-
-    printWifiData();
-
-    // Set RTC clock by WiFi
-    rtc.begin();
-    unsigned long epoch = 0;
-
-    while (epoch == 0) {
-      Serial.print("Attempting to get RTC epoch");
-
-      epoch = WiFi.getTime();
-
-      // wait 10 seconds for connection
-      delay(10000);
-    }
-
-    Serial.print("Epoch received: ");
-    Serial.println(epoch);
-    rtc.setEpoch(epoch);
-    Serial.println();
+    epoch = WiFi.getTime();
+#else
+    epoch = gsmAccess.getTime();
 #endif
+
+    // wait 10 seconds for connection
+    delay(10000);
+  }
+
+  Serial.print("Epoch received: ");
+  Serial.println(epoch);
+  rtc.setEpoch(epoch);
+  Serial.println();
 }
 
 void loop() {
